@@ -146,26 +146,26 @@ mu <- colMeans(Z, na.rm = TRUE)
 one_mat <- matrix(rep(1,T),nrow = T, ncol = 1) # Tx1 vector of 1s
 Z_tilde <- (Z - one_mat%*%t(mu))/(sqrt(T-1))
 dim(Z_tilde)
-C0_Z <- t(Z_tilde)%*%Z_tilde
-C0_Z[1,1] #0.1976449
 
-# Perform eigen decomposition
-eigen_result <- eigen(C0_Z)
 
-# Extract eigenvalues and eigenvectors
-eigenvalues <- eigen_result$values
-eigenvectors<- eigen_result$vectors
-dim(eigenvectors)
+# Function to perform EOF analysis using SVD
+compute_spatial_EOF <- function(data) {
+  svd_result_spatial_EOF <- svd(data)
+  Psi_spatial_EOF <- svd_result_spatial_EOF$v
+  eigen_values_spatial_EOF <- svd_result_spatial_EOF$d^2
+  total_variance_spatial_EOF <- sum(eigen_values_spatial_EOF)
+  expl_var_spatial_EOF <- eigen_values_spatial_EOF / total_variance_spatial_EOF
+  return(list(Psi_spatial_EOF = Psi_spatial_EOF, expl_var_spatial_EOF = expl_var_spatial_EOF))
+}
 
-# Sort eigenvalues and corresponding eigenvectors in decreasing order
-sorted_indices <- order(eigenvalues, decreasing = TRUE)
-sorted_eigenvalues <- eigenvalues[sorted_indices]
-sorted_eigenvectors <- eigenvectors[, sorted_indices]
+# Compute EOFs and number of EOFs
+Psi_spatial_EOF <- compute_spatial_EOF(Z_tilde)$Psi_spatial_EOF
+actual_expl_var_spatial_EOF <- compute_spatial_EOF(Z_tilde)$expl_var_spatial_EOF
 
-# Select the first 10 EOFs (eigenvectors)
-num_eofs <- 10
-EOFs <- sorted_eigenvectors[, 1:num_eofs]
+num_spatial_EOFs <- 10
+EOFs  <- Psi_spatial_EOF[,1:num_spatial_EOFs]
 dim(EOFs)
+View(EOFs)
 
 # Comment: Same EOF values as approach 1
 
@@ -186,6 +186,8 @@ dim(at)
 # Var-like model fit and estimation of M with different lags --------------
 
 # Step 1: Compute C0_a (covariance matrix at lag 0)
+View(at)
+dim(at)
 
 mu_hat <- colMeans(at)
 length(mu_hat)
@@ -216,11 +218,14 @@ M_freq_lag1 <- C1_a %*% solve(C0_a)
 M_freq_lag1 
 
 library(xtable)
-latex_code_M_freq_lag1 <- print(xtable(M_freq_lag1), include.rownames=TRUE, include.colnames=TRUE, floating=FALSE, hline.after=NULL, print.results = FALSE)
+latex_code_M_freq_lag1 <- print(xtable(M_freq_lag1), include.rownames=FALSE, include.colnames=FALSE, floating=FALSE, hline.after=NULL, print.results = FALSE)
 
 # Calculate the method-of-moments estimator M(lag-3)
 M_freq_lag3 <- C3_a %*% solve(C0_a)
 M_freq_lag3
+
+latex_code_M_freq_lag3 <- print(xtable(M_freq_lag3), include.rownames=FALSE, include.colnames=FALSE, floating=FALSE, hline.after=NULL, print.results = FALSE)
+
 
 # Calculate the method-of-moments estimator M(lag-6)
 M_freq_lag6 <- C6_a %*% solve(C0_a)
@@ -403,55 +408,49 @@ time_points <- seq(start_date, end_date, by = "1 month")
 
 # Define slice length (19 months per segment)
 segment_length <- 19
-num_segments <- ceiling(nrow(at) / segment_length)
+num_segments <- ceiling(nrow(at[,-1]) / segment_length)
 
 # Create index groups for slicing
-segment_indices <- split(1:nrow(at), ceiling(seq_along(1:nrow(at)) / segment_length))
+segment_indices <- split(1:nrow(at[,-1]), ceiling(seq_along(1:nrow(at[,-1])) / segment_length))
 
 # List to store M matrices
-M_list_freq <- list()
-
+M_list_freq_i <- list()
+library(pracma)
 # Loop through each 19-month slice and compute M
 for (i in seq_along(segment_indices)) {
   at_i <- at[segment_indices[[i]], ]  # Extract sub-matrix
   T_i <- nrow(at_i)  # Adjust time length for this segment
   
   # Step 1: Compute C0_a (covariance matrix at lag 0)
-  mu_hat <- colMeans(at_i)
-  a_centered <- scale(at_i, center = mu_hat, scale = FALSE)
-  C0_a <- var(a_centered)
+  mu_hat_i <- colMeans(at_i)
+  a_centered_i <- scale(at_i, center = mu_hat_i, scale = FALSE)
+  C0_a_i <- var(a_centered_i)
   
   # Step 2: Compute C1_a (lag-1 covariance matrix)
-  if (T_i > 1) {
-    C1_a <- cov(a_centered[-1, ], a_centered[-T_i, ])
-  } else {
-    C1_a <- matrix(0, ncol = ncol(at), nrow = ncol(at))  # Handle single-row case
-  }
+  C1_a_i <- cov(a_centered_i[-1, ], a_centered_i[-T_i, ])
+
   
   # Step 3: Compute the method-of-moments estimator M1_hat
-  if (det(C0_a) != 0) {
-    M_freq_lag1 <- C1_a %*% solve(C0_a)
-  } else {
-    M_freq_lag1 <- matrix(NA, ncol = ncol(at), nrow = ncol(at))  # Handle singular matrix
-  }
+  M_freq_lag1_i <- C1_a_i %*% pinv(C0_a_i)
+
   
   # Store result
-  M_list_freq[[paste0("M", i)]] <- M_freq_lag1
+  M_list_freq_i[[paste0("M", i)]] <- M_freq_lag1_i
 }
 
 # Compute mu_2 for each M matrix
-mu_2_values <- sapply(M_list_freq, function(M) {
+mu_2_values <- sapply(M_list_freq_i, function(M) {
     return(mu_2(M))
 })
 
 
 # Compute mu_3 for each M matrix
-mu_3_values <- sapply(M_list_freq, function(M) {
+mu_3_values <- sapply(M_list_freq_i, function(M) {
     return(mu_3(M))
   })
 
 # Compute mu_4 for each M matrix
-mu_4_values <- sapply(M_list_freq, function(M) {
+mu_4_values <- sapply(M_list_freq_i, function(M) {
     return(mu_4(M))
 })
 
@@ -563,6 +562,7 @@ head(nino_df)
 # Convert row names to a column for the first data frame
 at <- data.frame(at) %>% rownames_to_column(var = "Time")
 head(at)
+dim(at)
 
 # Standardize the format of the "Time" column
 at$Time <- gsub("^X", "", at$Time)  # Remove the 'X' prefix
@@ -596,11 +596,12 @@ unique_locations <- ssta_data %>%
 
 dim(unique_locations)  
 head(unique_locations)
-
+head(EOFs)
 spatial_EOF_data <- unique_locations
-colnames(EOFs) <-  paste0("EOF", 1:num_eofs)
+colnames(EOFs) <-  paste0("EOF", 1:num_spatial_EOFs)
 spatial_EOF_data <- cbind(spatial_EOF_data,EOFs)
 head(spatial_EOF_data)
+
 
 # Plot of EOF
 library(ggplot2)
@@ -666,7 +667,7 @@ create_plot <- function(df, cor_text, title_suffix) {
     geom_point(aes(y = Value, color = "Value"), size = 2) +
     geom_line(aes(y = ANOM3.4_normalized, color = "ANOM3.4"), size = 1) +
     geom_point(aes(y = ANOM3.4_normalized, color = "ANOM3.4"), size = 2) +
-    labs(title = paste("mu", title_suffix, "(Frobenius metric) and ANOM Values Over Time"),
+    labs(title = paste("mu", title_suffix, " and ANOM Values Over Time"),
          x = "Year", y = "Value / Normalized ANOM3.4", color = "Metric") +
     scale_x_date(date_labels = "%Y", date_breaks = "5 years") +
     annotate("text", x = min(df$Date), y = max(df$Value, na.rm = TRUE),
@@ -743,16 +744,16 @@ for (i in 1:num_permutations_time_EOF) {
 mean_permuted_var_time_EOF <- apply(permuted_var_time_EOF, 2, mean)
 
 # Plotting actual vs permuted explained variance
-var_df_time_EOF <- data.frame(Index = seq_len(ncol(Z_tilde_time_EOF)),
+var_df_time_EOF <- data.frame(Index = seq_len(length(actual_expl_var_time_EOF)),
                           Actual = actual_expl_var_time_EOF,
                           Permuted = mean_permuted_var_time_EOF)
 
 ggplot(var_df_time_EOF, aes(x = Index)) +
   geom_point(aes(y = Actual, color = "Actual Data")) +
   geom_point(aes(y = Permuted, color = "Permuted Data")) +
-  scale_color_manual(values = c("Actual Data" = "blue", "Permuted Data" = "red")) +
+  scale_color_manual(values = c("Actual Data" = "black", "Permuted Data" = "red")) +
   labs(title = "Time EOF Analysis: Actual vs. Permuted Data",
-       x = "Index of EOF", y = "Proportion of Variance Explained") +
+       x = "Index of EOF", y = "Relative variance") +
   theme_minimal()
 
 # Determine the number of significant EOFs
@@ -810,7 +811,7 @@ D1 <- dist(am_df %>% dplyr::select(latitude, longitude))
 
 #  Step 4: Use `NbClust` 
 nb_results <- NbClust(data = time_EOF_scaled, distance = "minkowski", 
-                      min.nc = 2, max.nc = 10, method = "centroid", index = "all")
+                      min.nc = 2, max.nc = 11, method = "centroid", index = "all")
 
 # Get the most frequently suggested number of clusters
 optimal_k <- as.integer(names(sort(table(nb_results$Best.nc[1,]), decreasing = TRUE)[1]))
@@ -823,7 +824,7 @@ barplot(table(nb_results$Best.nc[1,]),
         xlab = "Number of Clusters", ylab = "Frequency")
 
 #  Step 5: Perform Spatially-Constrained Clustering 
-alpha <- 0.6  # Adjust this value for spatial influence in `hclustgeo`
+alpha <- 0.6 # Adjust this value for spatial influence in `hclustgeo`
 hclust_result <- hclustgeo(D0, D1, alpha = alpha)
 
 # Assign clusters based on improved `NbClust`
@@ -831,7 +832,7 @@ clusters <- cutree(hclust_result, optimal_k )
 am_df$Cluster <- as.factor(clusters)
 
 # Step 6: Visualize the Clustered Locations 
-colors <- colorRampPalette(c("red", "green", "blue", "yellow", "hotpink1", "purple", "cyan"))(optimal_k)
+colors <- colorRampPalette(c("gold4","salmon", "green", "blue", "darkgoldenrod1", "darkcyan", "hotpink", "cyan","gray37","red"))(optimal_k)
 
 ggplot(am_df, aes(x = longitude, y = latitude, color = Cluster)) +
   geom_point(size = 3) +
@@ -857,7 +858,7 @@ am_df <- am_df %>%
 
 head(am_df)
 dim(am_df)
-View(am_df)
+#View(am_df)
 
 
 # Spatial EOFs for each clusters ------------------------------------------
@@ -876,7 +877,6 @@ cluster_7_df <- cluster_list[["7"]]
 cluster_8_df <- cluster_list[["8"]]
 cluster_9_df <- cluster_list[["9"]]
 cluster_10_df <- cluster_list[["10"]]
-
 
 dim(cluster_1_df)
 dim(cluster_2_df)
@@ -956,10 +956,11 @@ for (i in 1:optimal_k) {
   one_mat_i <- matrix(1, nrow = T_i, ncol = 1)
   Z_tilde_i <- (Z_i - one_mat_i %*% t(mu_vec_i)) / sqrt(T_i - 1)
   dim(Z_tilde_i)
+  
   # EOF function
   compute_EOF <- function(data) {
     svd_result <- svd(data, nu = T_i , nv = m_i )
-    Psi <- t(svd_result$v)
+    Psi <- svd_result$v
     eigen_values <- svd_result$d^2
     total_variance <- sum(eigen_values)
     expl_var <- eigen_values / total_variance
@@ -976,7 +977,7 @@ for (i in 1:optimal_k) {
   dim(Psi_list[[i]])
 
   # Permutation test
-  num_permutations <- 100
+  num_permutations <- 200
   permuted_var_i <- matrix(NA,nrow = num_permutations, ncol = length(expl_var_i))
   set.seed(123)
   
@@ -1004,13 +1005,12 @@ for (i in 1:optimal_k) {
     theme_minimal()
   
   # Determine number of significant EOFs
-  num_eofs_i <- which(expl_var_i < mean_permuted_var_i)[1]
+  num_eofs_i <- sum(expl_var_i > mean_permuted_var_i)
   if (is.na(num_eofs_i)) num_eofs_i <- length(expl_var_i)
   num_eofs_list[[i]] <- num_eofs_i
   EOF_list[[i]] <- Psi_i[, 1:num_eofs_i, drop = FALSE]
   plot_list[[i]] <- p
 }
-
 
 
 # Arrange all plots in a grid
@@ -1198,6 +1198,119 @@ ggplot(norm_data_long, aes(x = Cluster, y = Value, color = Norm_Type, group = No
   theme_minimal() +
   theme(legend.position = "top")
 
+
+# Corr with ANOM index for each cluster -----------------------------------
+
+library(ggplot2)
+library(gridExtra)
+
+# Number of clusters
+num_clusters <- 10
+
+# Define time range
+start_date <- as.Date("1970-01-01")
+end_date <- as.Date("2003-03-01")
+time_points <- seq(start_date, end_date, by = "1 month")
+
+# Set segment length (change to 21 if needed)
+segment_length <- 21 
+
+plots_list <- list()
+
+for (c in 1:num_clusters) {
+  cat("Processing Cluster", c, "\n")
+  
+  at_ssta <- at_list[[c]]
+  if (is.null(at_ssta) || nrow(at_ssta) < segment_length) {
+    next
+  }
+  
+  segment_indices <- split(1:nrow(at_ssta), ceiling(seq_along(1:nrow(at_ssta)) / segment_length))
+  num_segments <- length(segment_indices)
+  
+  M_cluster <- list()
+  mu2_vals <- c()
+  mu3_vals <- c()
+  mu4_vals <- c()
+  mid_indices <- c()
+  
+  for (i in seq_along(segment_indices)) {
+    idx <- segment_indices[[i]]
+    if (length(idx) < 10) next  # Skip too-small segments
+    
+    at_seg <- at_ssta[idx, ]
+    T_seg <- nrow(at_seg)
+    
+    a_centered <- scale(at_seg, center = TRUE, scale = FALSE)
+    C0 <- var(a_centered) + 1e-5 * diag(ncol(a_centered))
+    C1 <- cov(a_centered[-1, ], a_centered[-T_seg, ])
+    
+    M_i <- tryCatch(C1 %*% solve(C0), error = function(e) NULL)
+    if (is.null(M_i)) next
+    
+    M_cluster[[i]] <- M_i
+    mid_idx <- idx[min(length(idx), ceiling(length(idx)/2))]
+    mid_indices <- c(mid_indices, mid_idx)
+    
+    # Metrics
+    mu2_vals <- c(mu2_vals, mu_2(M_i))
+    mu3_vals <- c(mu3_vals, mu_3(M_i))
+    mu4_vals <- c(mu4_vals, mu_4(M_i))
+  }
+  
+  if (length(mid_indices) == 0) next
+  
+  dates <- time_points[mid_indices]
+  anom_vals <- as.numeric(merged_data_list[[c]]$ANOM3.4[mid_indices])
+  anom_vals[is.na(anom_vals)] <- mean(anom_vals, na.rm = TRUE)
+  
+  df2 <- data.frame(Date = dates, Value = mu2_vals, ANOM3.4 = anom_vals)
+  df3 <- data.frame(Date = dates, Value = mu3_vals, ANOM3.4 = anom_vals)
+  df4 <- data.frame(Date = dates, Value = mu4_vals, ANOM3.4 = anom_vals)
+  
+  # Normalize ANOM3.4
+  normalize_anom <- function(df) {
+    df$ANOM3.4 <- (df$ANOM3.4 - min(df$ANOM3.4)) / (max(df$ANOM3.4) - min(df$ANOM3.4)) * 
+      (max(df$Value) - min(df$Value)) + min(df$Value)
+    return(df)
+  }
+  df2 <- normalize_anom(df2)
+  df3 <- normalize_anom(df3)
+  df4 <- normalize_anom(df4)
+  
+  plot_fn <- function(df, metric, title_suffix) {
+    ggplot(df, aes(x = Date)) +
+      geom_line(aes(y = Value, color = "Value")) +
+      geom_point(aes(y = Value, color = "Value")) +
+      geom_line(aes(y = ANOM3.4, color = "ANOM3.4")) +
+      geom_point(aes(y = ANOM3.4, color = "ANOM3.4")) +
+      labs(title = paste("mu", title_suffix, "vs ANOM3.4 - Cluster", c),
+           y = "Non-normality Metric / ANOM3.4",
+           color = "Legend") +
+      theme_minimal() +
+      annotate("text", x = min(df$Date), y = max(df$Value),
+               label = paste("Corr:", round(cor(df$Value, df$ANOM3.4), 4)),
+               hjust = 0, vjust = 1.5)
+  }
+  
+  p1 <- plot_fn(df2, "mu_2", 2)
+  p2 <- plot_fn(df3, "mu_3", 3)
+  p3 <- plot_fn(df4, "mu_4", 4)
+  
+  plots_list[[c]] <- list(p1, p2, p3)
+}
+# Arrange all plots vertically for each cluster
+for (c in 1:num_clusters) {
+  cat("Displaying plots for Cluster", c, "\n")
+  grid.arrange(plots_list[[c]][[1]], 
+               plots_list[[c]][[2]], 
+               plots_list[[c]][[3]], 
+               ncol = 1)  
+}
+
+
+
+
 # BHM (gibbs sampler) ------------------------------------------------------
 
 library(MASS)
@@ -1207,11 +1320,11 @@ library(MCMCpack)
 library(progress)
 
 
-gibbs_sampler_simulated <- function(n_iter) {
+gibbs_sampler <- function(n_iter) {
   set.seed(1000)
   
   # Data (EOF)
-  Z <- t(at) 
+  Z <- t(at[,-1]) 
   
   n <- nrow(Z)
   T <- ncol(Z)
@@ -1229,13 +1342,13 @@ gibbs_sampler_simulated <- function(n_iter) {
   mu_m <- rep(0, n^2)
   Sigma_m <- diag(1, n^2)  
   
-  H_list <- lapply(1:T, function(x) matrix(runif(n * n), n, n))
+  H_list <- lapply(1:T, function(x) diag(1,n))
   
   # Initial values
-  Y_1 <- matrix(rnorm(n * (T + 1), 0, 1), nrow = n, ncol = (T + 1))
-  M_1 <- matrix(rnorm(n * n, 0, 4), nrow = n)
-  R_1 <- diag(runif(n, 0.5, 1.5), n)
-  Q_1 <- diag(runif(n, 0.5, 1.5), n)
+  Y_1 <- cbind(rep(0.7,n),Z)
+  M_1 <- diag(0.8, n)                       
+  R_1 <- diag(0.1, n)                       
+  Q_1 <- diag(apply(Z, 1, var))             
   
   # Storage
   Y_0_updated_1 <- matrix(NA, n, n_iter)
@@ -1259,27 +1372,36 @@ gibbs_sampler_simulated <- function(n_iter) {
   for (i in 1:n_iter) {
     iter_start <- proc.time()
     
+    Q_1_inv <- solve(Q_1)
+    M_1_trans_Q_1_inv <-  t(M_1) %*% Q_1_inv
+    Sigma_0_inv <- solve(Sigma_0)
+    
     ## ===== Update Y_0 =====
-    v_0 <- solve(t(M_1) %*% solve(Q_1 + diag(1e-6, n), M_1) + solve(Sigma_0 + diag(1e-6, n)))
-    a_0 <- t(M_1) %*% solve(Q_1, Y_1[, 2]) + solve(Sigma_0, mu_0)
+    v_0 <- solve(M_1_trans_Q_1_inv %*% M_1 + Sigma_0_inv)
+    a_0 <- M_1_trans_Q_1_inv %*% Y_1[, 2] + Sigma_0_inv %*% mu_0
     Y_0 <- mvrnorm(1, v_0 %*% a_0, v_0)
     Y_0_updated_1[, i] <- Y_0
     
     ## ===== Update Y_t (1 to T-1) =====
+    
+    R_1_inv <- solve(R_1)
+    Q_1_inv_M_1 <- Q_1_inv %*% M_1
+    
     for (t in 1:(T - 1)) {
-      v_t[[t]] <- solve(t(H_list[[t]]) %*% solve(R_1, H_list[[t]]) +
-                          solve(Q_1) + t(M_1) %*% solve(Q_1, M_1))
-      a_t[, t] <- t(H_list[[t]]) %*% solve(R_1, Z[, t]) +
-        solve(Q_1, M_1 %*% Y_1[, t]) +
-        t(M_1) %*% solve(Q_1, Y_1[, t + 1])
+      v_t[[t]] <- solve( t(H_list[[t]]) %*% R_1_inv %*% H_list[[t]] +
+                         Q_1_inv + M_1_trans_Q_1_inv %*% M_1 )
+      a_t[, t] <- t(H_list[[t]]) %*% R_1_inv %*% Z[,t] +
+                  Q_1_inv_M_1 %*% Y_1[,t] +
+                  M_1_trans_Q_1_inv %*% Y_1[,t+2]
+        
       Y_t[, t] <- mvrnorm(1, v_t[[t]] %*% a_t[, t], v_t[[t]])
     }
     Y_t_updated_1[[i]] <- Y_t
     
     ## ===== Update Y_T =====
     H_T <- H_list[[T]]
-    v_T <- solve(t(H_T) %*% solve(R_1, H_T) + solve(Q_1))
-    a_T <- t(H_T) %*% solve(R_1, Z[, T]) + solve(Q_1, M_1 %*% Y_1[, T])
+    v_T <- solve(t(H_T) %*% R_1_inv %*% H_T + Q_1_inv)
+    a_T <- t(H_T) %*% R_1_inv %*% Z[, T] + Q_1_inv_M_1 %*% Y_1[, T]
     Y_T <- mvrnorm(1, v_T %*% a_T, v_T)
     Y_T_updated_1[, i] <- Y_T
     
@@ -1289,32 +1411,36 @@ gibbs_sampler_simulated <- function(n_iter) {
     
     ## ===== Update R =====
     scale_R <- matrix(0, n, n)
+    
     for (t in 1:T) {
       diff_R[, t] <- Z[, t] - H_list[[t]] %*% Y_1[, t + 1]
       scale_R <- scale_R + diff_R[, t] %*% t(diff_R[, t])
     }
+    
     scale_R <- solve(scale_R + nu_R * C_R)
-    R_1_inv <- rwish(nu_R + T, scale_R)
-    R_1 <- solve(R_1_inv)
+    R_1 <- solve(rwish(nu_R + T, scale_R))
     R_updated_1[[i]] <- R_1
     
     ## ===== Update Q =====
     scale_Q <- matrix(0, n, n)
+    
     for (t in 2:(T + 1)) {
       diff_Q[, t - 1] <- Y_1[, t] - M_1 %*% Y_1[, t - 1]
       scale_Q <- scale_Q + diff_Q[, t - 1] %*% t(diff_Q[, t - 1])
     }
+    
     scale_Q <- solve(scale_Q + nu_q * C_q)
-    Q_1_inv <- rwish(nu_q + T, scale_Q)
-    Q_1 <- solve(Q_1_inv)
+    Q_1 <- solve(rwish(nu_q + T, scale_Q))
     Q_updated_1[[i]] <- Q_1
     
     ## ===== Update M =====
     I_T <- Diagonal(T, x = 1)
     Y_kron <- kronecker(t(Y_1[, 1:T]), Diagonal(n, x = 1))
-    Q_inv <- solve(kronecker(I_T, Q_1))
-    v_m <- solve(t(Y_kron) %*% Q_inv %*% Y_kron + solve(Sigma_m))
-    a_m <- t(Y_kron) %*% Q_inv %*% as.vector(Y_1[, 2:(T + 1)]) + solve(Sigma_m, mu_m)
+    Q_tilde_inv <- solve(kronecker(I_T, Q_1))
+    Sigma_m_inv <- solve(Sigma_m)
+    
+    v_m <- solve(t(Y_kron) %*% Q_tilde_inv %*% Y_kron + Sigma_m_inv)
+    a_m <- t(Y_kron) %*% Q_tilde_inv %*% as.vector(Y_1[, 2:(T + 1)]) +  Sigma_m_inv %*% mu_m
     m <- mvrnorm(1, v_m %*% a_m, v_m)
     M_1 <- matrix(m, nrow = n)
     M_updated_1[[i]] <- M_1
@@ -1342,24 +1468,42 @@ gibbs_sampler_simulated <- function(n_iter) {
 }
 
 
-result_fixed <- gibbs_sampler_simulated(10000)
+result_fixed <- gibbs_sampler(10000)
 
 
 # Print total execution time
 print(result_fixed$execution_time_total_1)
 
 # Extract M_updated_1 from the result list
-M_sim_est_1 <- result_fixed$M_updated_1  
+M_est_1 <- result_fixed$M_updated_1  
 
 # Convert the list of matrices into a 3D array
-M_sim_est_array_1 <- simplify2array(M_sim_est_1)
-M_sim_est_array_1
+M_est_array_1 <- simplify2array(M_est_1)
+M_est_array_1
 
 # Compute the element-wise mean across all 100 matrices
-M_sim_est <- apply(M_sim_est_array_1 , c(1, 2), mean)
-M_sim_est
+M_bayes <- apply(M_est_array_1 , c(1, 2), mean)
+M_bayes
+M_freq_lag1
 
-# stochastic optimals and eofs -----------------------------------------------------
+abs_diff_mat <- abs(M_bayes - M_freq_lag1)
+# Flatten the matrix to a vector
+flattened_differences <- c(abs_diff_mat)
+
+# Plot
+par(mfrow = c(1,1))
+plot(flattened_differences, type = 'o', pch = 20, col = 'blue', ylim = c(0, max(flattened_differences) + 0.1),
+     main = "Absolute Differences with Error Band",
+     xlab = "Matrix Element Index", ylab = "Absolute Difference")
+abline(h = 0.02, col = "red", lty = 2) # Error band upper line
+polygon(c(1, length(flattened_differences), length(flattened_differences), 1),
+        c(0, 0, 0.02, 0.02), col = rgb(1, 0, 0, 0.2), border = NA)
+
+
+
+
+
+# stochastic optimals and eofs using M_freq -----------------------------------------------------
 
 solve_discrete_lyapunov <- function(M) {
   I <- diag(nrow(M))
@@ -1410,7 +1554,7 @@ eigen(Sigma_Y_result)
 
 ## With Freq M
 
-M_freq_lag1
+dim(M_freq_lag1)
 
 B_result_freq <- solve_discrete_lyapunov(M_freq_lag1)
 B_result_freq
@@ -1422,10 +1566,98 @@ Sigma_Y_result_freq
 eigen(B_result_freq)
 eigen(Sigma_Y_result_freq)
 
+E_B_freq <- eigen(B_result_freq)$vectors
+lambda_B_freq <- eigen(B_result_freq)$values
+
+E_Sigma_Y_freq <- eigen(Sigma_Y_result_freq)$vectors
+lambda_Sigma_Y_freq <- eigen(Sigma_Y_result_freq)$values
+
+latex_code_E_Sigma_Y_freq <- print(xtable(E_Sigma_Y_freq), include.rownames=FALSE, include.colnames=FALSE, floating=FALSE, hline.after=NULL, print.results = FALSE)
+
+lambda_Sigma_Y_freq[1]/sum(lambda_Sigma_Y_freq)
 
 
 
-# Balanced truncation -----------------------------------------------------
+
+
+# stochastic optimals and eofs using M_bayes -------------------------------------------------------------------
+
+## With Bayesian M
+
+dim(M_bayes)
+
+B_result_bayes <- solve_discrete_lyapunov(M_bayes)
+B_result_bayes
+
+Sigma_Y_result_bayes <- solve_discrete_lyapunov_eof(M_bayes)
+Sigma_Y_result_bayes
+
+# Eigen decomposition
+eigen(B_result_bayes)
+eigen(Sigma_Y_result_bayes)
+
+E_B_bayes <- eigen(B_result_bayes)$vectors
+lambda_B_bayes <- eigen(B_result_bayes)$values
+
+latex_code_E_B_bayes <- print(xtable(E_B_bayes), include.rownames=FALSE, include.colnames=FALSE, floating=FALSE, hline.after=NULL, print.results = FALSE)
+
+
+E_Sigma_Y_bayes <- eigen(Sigma_Y_result_bayes)$vectors
+lambda_Sigma_Y_bayes <- eigen(Sigma_Y_result_bayes)$values
+
+latex_code_E_Sigma_Y_bayes <- print(xtable(E_Sigma_Y_bayes), include.rownames=FALSE, include.colnames=FALSE, floating=FALSE, hline.after=NULL, print.results = FALSE)
+
+lambda_B_bayes[2]/sum(lambda_B_bayes)
+lambda_Sigma_Y_bayes[1]/sum(lambda_Sigma_Y_bayes)
+
+
+# Plot of SO1 ------------------------------------------------------------
+
+M_freq_lag1
+M_bayes
+
+# Freq M
+head(unique_locations)
+head(E_B_freq)
+SO_freq <- E_B_freq 
+colnames(SO_freq) <-  paste0("SO", 1:ncol(SO_freq))
+SO_data_freq <- cbind(unique_locations,SO_freq)
+head(SO_data_freq)
+
+# Freq M
+head(unique_locations)
+head(E_B_bayes)
+SO_bayes <- E_B_bayes 
+colnames(SO_bayes) <-  paste0("SO", 1:ncol(SO_bayes))
+SO_data_bayes <- cbind(unique_locations,SO_bayes)
+head(SO_data_bayes)
+
+library(ggplot2)
+library(dplyr)
+
+freq_so1 <- ggplot(SO_data_freq %>%
+         mutate(longitude = ifelse(longitude < 0, longitude + 360, longitude))) +
+  geom_tile(aes(x = longitude, y = latitude, fill = SO1)) +
+  scale_fill_viridis_c(name = "Amplitude", option = "A") +  
+  theme_bw() +
+  labs(title = "Spatial Plot of SO1 (Freq)",
+       x = "Longitude (deg)",
+       y = "Latitude (deg)") +
+  coord_fixed(expand = FALSE)  # Equal aspect ratio
+
+bayes_so1 <- ggplot(SO_data_bayes %>%
+         mutate(longitude = ifelse(longitude < 0, longitude + 360, longitude))) +
+  geom_tile(aes(x = longitude, y = latitude, fill = SO1)) +
+  scale_fill_viridis_c(name = "Amplitude", option = "A") +  
+  theme_bw() +
+  labs(title = "Spatial Plot of SO1 (Bayes)",
+       x = "Longitude (deg)",
+       y = "Latitude (deg)") +
+  coord_fixed(expand = FALSE)  # Equal aspect ratio
+
+grid.arrange(freq_so1,bayes_so1)
+
+# Balanced truncation and Hankel Singular Values by FARRELL & IOANNOU -----------------------------------------------------
 
 # Sigma_Y = P and B = Q by FARRELL & IOANNOU
 
@@ -1465,25 +1697,24 @@ sigma_freq
 
 sigma_df_freq <- data.frame(SingularValue = sigma_freq, Index = 1:length(sigma_freq))
 
-# Plot the scree plot
-library(ggplot2)
-plot <- ggplot(sigma_df_freq, aes(x = Index, y = SingularValue)) +
-  geom_line() +  
-  geom_point() +  
-  scale_x_continuous(breaks = 1:length(sigma_freq)) +  
-  labs(title = "Scree Plot of Hankel Singular Values (Freq)",
-       x = "Index",
-       y = "Singular Value") +
+get_k_energy <- function(sigma_vals, threshold = 0.95) {
+  sigma_vals <- sigma_vals  # Ensure real
+  energy <- sigma_vals^2        # Energy is square of singular values
+  cum_energy <- cumsum(energy) / sum(energy)  # Cumulative % of total energy
+  k <- which(cum_energy >= threshold)[1]      # First index where threshold is reached
+  return(k)
+}
+
+k_freq <- get_k_energy(sigma_freq, threshold = 0.80)
+cat("k_freq from energy threshold (80%):", k_freq, "\n")
+
+
+qplot(1:length(sigma_freq), sigma_freq, geom = "point") +
+  geom_line() +
+  geom_vline(xintercept = k_freq, color = "red", linetype = "dotted", size = 1) +
+  labs(title = paste("Scree Plot"), x = "Singular values", y = "Relative variance") +
   theme_minimal()
 
-# Detecting the elbow point using the 'elbow' method
-elbow_point_freq <- which(diff(diff(sigma_freq)) == min(diff(diff(sigma_freq)))) + 1 
-plot + geom_vline(xintercept = elbow_point_freq, linetype = "dashed", color = "blue") +
-  annotate("text", x = elbow_point_freq, y = max(sigma_freq), label = paste("Elbow at index", elbow_point_freq), vjust = -1)
-
-
-
-k_freq <- elbow_point_freq  # Choose the number of modes to retain
 
 A_tilde_11_freq <- A_tilde_freq[1:k_freq, 1:k_freq] # k=5 x k=5 matrix
 A_tilde_11_freq
@@ -1493,8 +1724,6 @@ latex_code_A_tilde_11_freq <- print(xtable(A_tilde_11_freq), include.rownames=FA
 
 T1_inv_freq <- T_inv_freq[, 1:k_freq]  # n=10 x k=5 matrix
 dim(T1_inv_freq)
-
-
 
 # Function that evolves the reduced system 
 reduced_step <- function(z_t) {
@@ -1506,9 +1735,449 @@ recover_full_state <- function(z_t) {
   return(T1_inv_freq %*% z_t)
 }
 
+dim(at)
+at_numeric <- as.matrix(at[1:k_freq, -1])  # drops Time column
 
-zt_reduce <- reduced_step(at[1:k_freq,1:10])
+zt_reduce <- reduced_step(at_numeric)
 dim(zt_reduce)
 
 at_recover <- recover_full_state(zt_reduce)
 dim(at_recover)
+
+dim(t(at))
+dim(T_freq)
+
+T1_freq <- T_freq[ 1:k_freq,]  # k=4 x n=10 matrix
+dim(T1_freq)
+View(at)
+
+# Using T1 I will get at_reduced (say zt) then calculate M_reduced (kxk)
+
+zt <- t(T1_freq %*% t(at[,-1]))
+dim(zt)
+View(zt)
+
+# Step 1: Compute C0_a
+mu_hat_zt <- colMeans(zt)
+z_centered <- scale(zt, center = mu_hat_zt, scale = FALSE)
+C0_z <- var(z_centered)
+dim(C0_z)
+#View(C0_z)
+
+# Step 2: Compute C1_z (lag-1 covariance matrix)
+C1_z <- cov(z_centered[-1, ], z_centered[-T, ])
+dim(C1_z)
+#View(C1_a)
+
+# Step 3: Calculate the method-of-moments estimator M(lag-1)
+M_freq_zt <- C1_z %*% solve(C0_z)
+M_freq_zt
+
+A_tilde_11_freq
+
+
+
+# Hankel Singular Values by AOKI & HAVENNER -------------------------------------------------------------------
+
+dim(at)
+at_new <- t(at[,-1])
+# Function to compute sample autocovariance matrices
+compute_autocovariances <- function(at_new, max_lag) {
+  m <- nrow(at_new)
+  T <- ncol(at_new)
+  gamma_list <- list()
+  
+
+  for (lag in 0:max_lag) {
+    gamma_h <- matrix(0, m, m)
+    for (t in 1:(T - lag)) {
+      gamma_h <- gamma_h + at_new[, t + lag] %*% t(at_new[, t])
+    }
+    gamma_h <- gamma_h / T 
+    gamma_list[[lag + 1]] <- gamma_h  # Store with lag+1 to index from 1
+  }
+  return(gamma_list)
+}
+
+# Function to construct the block Hankel matrix H from sample autocovariances
+construct_Hankel <- function(gamma_list, k) {
+  m <- nrow(gamma_list[[1]])
+  H <- matrix(0, nrow = k * m, ncol = k * m)
+  
+  for (i in 1:k) {
+    for (j in 1:k) {
+      H[((i - 1) * m + 1):(i * m), ((j - 1) * m + 1):(j * m)] <- gamma_list[[i + j -1]]
+    }
+  }
+  return(H)
+}
+
+# k: user-specified depth of Hankel matrix
+k <- 7
+gamma_list <- compute_autocovariances(at_new, 2 * k)
+H <- construct_Hankel(gamma_list, k)
+#View(H)
+dim(H)
+
+Hankel_sing_vals <- sort(svd(H)$d, decreasing = TRUE)
+head(sigma_freq)
+head(Hankel_sing_vals)
+
+sigma_freq[1]/sum(sigma_freq)
+Hankel_sing_vals[1]/sum(Hankel_sing_vals)
+
+# Balanced truncation for cluster 4 using EOF data ---------------------------------------
+
+M_freq_c4 <- M_hat_list[[4]]
+B_freq_c4 <- solve_discrete_lyapunov(M_freq_c4)
+Sigma_Y_freq_c4 <- solve_discrete_lyapunov_eof(M_freq_c4)
+
+P_freq_c4 <- Sigma_Y_freq_c4
+Q_freq_c4 <- B_freq_c4
+
+eig_P_freq_c4 <- eigen(P_freq_c4)
+P_sqrt_freq_c4 <- eig_P_freq_c4$vectors %*% diag(sqrt(eig_P_freq_c4$values)) %*% t(eig_P_freq_c4$vectors)
+
+R_freq_c4 <- P_sqrt_freq_c4 %*% Q_freq_c4 %*% P_sqrt_freq_c4
+R_freq_c4
+
+eig_R_freq_c4 <- eigen(R_freq_c4)
+U_freq_c4 <- eig_R_freq_c4$vectors  # Unitary matrix U
+Sigma_squared_freq_c4 <- diag(eig_R_freq_c4$values)  # Eigenvalues = Hankel singular values squared
+Sigma_squared_freq_c4
+
+
+all.equal(t(U_freq_c4) %*% R_freq_c4 %*% U_freq_c4, Sigma_squared_freq_c4) #TRUE
+
+
+P_inv_sqrt_freq_c4 <- eig_P_freq_c4$vectors %*% diag(1 / sqrt(eig_P_freq_c4$values)) %*% t(eig_P_freq_c4$vectors)
+
+Sigma_vals_freq_c4 <- sqrt(diag(Sigma_squared_freq_c4))  
+Sigma_freq_c4 <- diag(Sigma_vals_freq_c4)
+Sigma_half_freq_c4 <- diag(sqrt(Sigma_vals_freq_c4))  # S^{1/2}
+
+T_freq_c4 <- Sigma_half_freq_c4 %*% t(U_freq_c4) %*% P_inv_sqrt_freq_c4
+T_freq_c4
+
+T_inv_freq_c4 <- solve(T_freq_c4)
+A_tilde_freq_c4 <- T_freq_c4 %*% M_freq_c4 %*% T_inv_freq_c4
+A_tilde_freq_c4
+
+sigma_freq_c4 <- sort(Sigma_vals_freq_c4, decreasing = TRUE) # Hankel singular values
+sigma_freq_c4
+
+sigma_df_freq_c4 <- data.frame(SingularValue = sigma_freq_c4, Index = 1:length(sigma_freq_c4))
+
+get_k_energy <- function(sigma_vals, threshold ) {
+  sigma_vals <- sigma_vals  # Ensure real
+  energy <- sigma_vals^2        # Energy is square of singular values
+  cum_energy <- cumsum(energy) / sum(energy)  # Cumulative % of total energy
+  k <- which(cum_energy >= threshold)[1]      # First index where threshold is reached
+  return(k)
+}
+
+k_freq_c4 <- get_k_energy(sigma_freq_c4, threshold = 0.70)
+cat("k_freq from energy threshold (80%):", k_freq_c4, "\n")
+
+
+qplot(1:length(sigma_freq_c4), sigma_freq_c4, geom = "point") +
+  geom_line() +
+  geom_vline(xintercept = k_freq_c4, color = "red", linetype = "dotted", size = 1) +
+  labs(title = paste("Scree Plot for c4"), x = "Singular values", y = "Relative variance") +
+  theme_minimal()
+
+
+A_tilde_11_freq_c4 <- A_tilde_freq_c4[1:k_freq_c4, 1:k_freq_c4] # k=5 x k=5 matrix
+A_tilde_11_freq_c4
+latex_code_A_tilde_11_freq_c4 <- print(xtable(A_tilde_11_freq_c4), include.rownames=FALSE, include.colnames=FALSE, floating=FALSE, hline.after=NULL, print.results = FALSE)
+
+
+
+T1_inv_freq_c4 <- T_inv_freq_c4[, 1:k_freq_c4]  # n x k matrix
+dim(T1_inv_freq_c4)
+
+# Function that evolves the reduced system 
+reduced_step <- function(z_t) {
+  return(A_tilde_11_freq %*% z_t)
+}
+
+# Function to recover full state from reduced coordinates
+recover_full_state <- function(z_t) {
+  return(T1_inv_freq %*% z_t)
+}
+at_c4 <- at_list[[4]]
+at_numeric_c4 <- as.matrix(at_c4[1:k_freq, -1])  # drops Time column
+
+zt_reduce_c4 <- reduced_step(at_numeric_c4)
+dim(zt_reduce_c4)
+
+at_recover_c4 <- recover_full_state(zt_reduce_c4)
+dim(at_recover_c4)
+
+
+
+T1_freq_c4 <- T_freq_c4[ 1:k_freq_c4,]  # k=4 x n=10 matrix
+dim(T1_freq_c4)
+dim(at_c4)
+
+# Using T1 I will get at_reduced (say zt) then calculate M_reduced (kxk)
+
+zt_c4 <- t(T1_freq_c4 %*% t(at_c4))
+dim(zt_c4)
+
+# Step 1: Compute C0_a
+mu_hat_zt_c4 <- colMeans(zt_c4)
+z_centered_c4 <- scale(zt_c4, center = mu_hat_zt_c4, scale = FALSE)
+C0_z_c4 <- var(z_centered_c4)
+dim(C0_z_c4)
+#View(C0_z)
+
+# Step 2: Compute C1_z (lag-1 covariance matrix)
+C1_z_c4 <- cov(z_centered_c4[-1, ], z_centered_c4[-T, ])
+dim(C1_z_c4)
+#View(C1_a)
+
+# Step 3: Calculate the method-of-moments estimator M(lag-1)
+M_freq_zt_c4 <- C1_z_c4 %*% solve(C0_z_c4)
+M_freq_zt_c4
+
+A_tilde_11_freq_c4
+
+
+
+# Balanced truncation for cluster 7 using EOF data ---------------------------------------
+
+M_freq_c7 <- M_hat_list[[7]]
+B_freq_c7 <- solve_discrete_lyapunov(M_freq_c7)
+Sigma_Y_freq_c7 <- solve_discrete_lyapunov_eof(M_freq_c7)
+
+P_freq_c7 <- Sigma_Y_freq_c7
+Q_freq_c7 <- B_freq_c7
+
+eig_P_freq_c7 <- eigen(P_freq_c7)
+P_sqrt_freq_c7 <- eig_P_freq_c7$vectors %*% diag(sqrt(eig_P_freq_c7$values)) %*% t(eig_P_freq_c7$vectors)
+
+R_freq_c7 <- P_sqrt_freq_c7 %*% Q_freq_c7 %*% P_sqrt_freq_c7
+R_freq_c7
+
+eig_R_freq_c7 <- eigen(R_freq_c7)
+U_freq_c7 <- eig_R_freq_c7$vectors  # Unitary matrix U
+Sigma_squared_freq_c7 <- diag(eig_R_freq_c7$values)  # Eigenvalues = Hankel singular values squared
+Sigma_squared_freq_c7
+
+
+all.equal(t(U_freq_c7) %*% R_freq_c7 %*% U_freq_c7, Sigma_squared_freq_c7) #TRUE
+
+
+P_inv_sqrt_freq_c7 <- eig_P_freq_c7$vectors %*% diag(1 / sqrt(eig_P_freq_c7$values)) %*% t(eig_P_freq_c7$vectors)
+
+Sigma_vals_freq_c7 <- sqrt(diag(Sigma_squared_freq_c7))  
+Sigma_freq_c7 <- diag(Sigma_vals_freq_c7)
+Sigma_half_freq_c7 <- diag(sqrt(Sigma_vals_freq_c7))  # S^{1/2}
+
+T_freq_c7 <- Sigma_half_freq_c7 %*% t(U_freq_c7) %*% P_inv_sqrt_freq_c7
+T_freq_c7
+
+T_inv_freq_c7 <- solve(T_freq_c7)
+A_tilde_freq_c7 <- T_freq_c7 %*% M_freq_c7 %*% T_inv_freq_c7
+A_tilde_freq_c7
+
+sigma_freq_c7 <- sort(Sigma_vals_freq_c7, decreasing = TRUE) # Hankel singular values
+sigma_freq_c7
+
+sigma_df_freq_c7 <- data.frame(SingularValue = sigma_freq_c7, Index = 1:length(sigma_freq_c7))
+
+get_k_energy <- function(sigma_vals, threshold ) {
+  sigma_vals <- sigma_vals  # Ensure real
+  energy <- sigma_vals^2        # Energy is square of singular values
+  cum_energy <- cumsum(energy) / sum(energy)  # Cumulative % of total energy
+  k <- which(cum_energy >= threshold)[1]      # First index where threshold is reached
+  return(k)
+}
+
+k_freq_c7 <- get_k_energy(sigma_freq_c7, threshold = 0.70)
+cat("k_freq from energy threshold (70%):", k_freq_c7, "\n")
+
+
+qplot(1:length(sigma_freq_c7), sigma_freq_c7, geom = "point") +
+  geom_line() +
+  geom_vline(xintercept = k_freq_c7, color = "red", linetype = "dotted", size = 1) +
+  labs(title = paste("Scree Plot for c7"), x = "Singular values", y = "Relative variance") +
+  theme_minimal()
+
+
+A_tilde_11_freq_c7 <- A_tilde_freq_c7[1:k_freq_c7, 1:k_freq_c7] # k=5 x k=5 matrix
+A_tilde_11_freq_c7
+latex_code_A_tilde_11_freq_c7 <- print(xtable(A_tilde_11_freq_c7), include.rownames=FALSE, include.colnames=FALSE, floating=FALSE, hline.after=NULL, print.results = FALSE)
+
+
+
+T1_inv_freq_c7 <- T_inv_freq_c7[, 1:k_freq_c7]  # n x k matrix
+dim(T1_inv_freq_c7)
+
+# Function that evolves the reduced system 
+reduced_step <- function(z_t) {
+  return(A_tilde_11_freq %*% z_t)
+}
+
+# Function to recover full state from reduced coordinates
+recover_full_state <- function(z_t) {
+  return(T1_inv_freq %*% z_t)
+}
+at_c7 <- at_list[[7]]
+at_numeric_c7 <- as.matrix(at_c7[1:k_freq, -1])  # drops Time column
+
+zt_reduce_c7 <- reduced_step(at_numeric_c7)
+dim(zt_reduce_c7)
+
+at_recover_c7 <- recover_full_state(zt_reduce_c7)
+dim(at_recover_c7)
+
+
+
+T1_freq_c7 <- T_freq_c7[ 1:k_freq_c7,]  # k=4 x n=10 matrix
+dim(T1_freq_c7)
+dim(at_c7)
+
+# Using T1 I will get at_reduced (say zt) then calculate M_reduced (kxk)
+
+zt_c7 <- t(T1_freq_c7 %*% t(at_c7))
+dim(zt_c7)
+
+# Step 1: Compute C0_a
+mu_hat_zt_c7 <- colMeans(zt_c7)
+z_centered_c7 <- scale(zt_c7, center = mu_hat_zt_c7, scale = FALSE)
+C0_z_c7 <- var(z_centered_c7)
+dim(C0_z_c7)
+#View(C0_z)
+
+# Step 2: Compute C1_z (lag-1 covariance matrix)
+C1_z_c7 <- cov(z_centered_c7[-1, ], z_centered_c7[-T, ])
+dim(C1_z_c7)
+#View(C1_a)
+
+# Step 3: Calculate the method-of-moments estimator M(lag-1)
+M_freq_zt_c7 <- C1_z_c7 %*% solve(C0_z_c7)
+M_freq_zt_c7
+
+A_tilde_11_freq_c7
+
+
+# Balanced truncation for cluster 10 using EOF data ---------------------------------------
+
+M_freq_c10 <- M_hat_list[[10]]
+B_freq_c10 <- solve_discrete_lyapunov(M_freq_c10)
+Sigma_Y_freq_c10 <- solve_discrete_lyapunov_eof(M_freq_c10)
+
+P_freq_c10 <- Sigma_Y_freq_c10
+Q_freq_c10 <- B_freq_c10
+
+eig_P_freq_c10 <- eigen(P_freq_c10)
+P_sqrt_freq_c10 <- eig_P_freq_c10$vectors %*% diag(sqrt(eig_P_freq_c10$values)) %*% t(eig_P_freq_c10$vectors)
+
+R_freq_c10 <- P_sqrt_freq_c10 %*% Q_freq_c10 %*% P_sqrt_freq_c10
+R_freq_c10
+
+eig_R_freq_c10 <- eigen(R_freq_c10)
+U_freq_c10 <- eig_R_freq_c10$vectors  # Unitary matrix U
+Sigma_squared_freq_c10 <- diag(eig_R_freq_c10$values)  # Eigenvalues = Hankel singular values squared
+Sigma_squared_freq_c10
+
+
+all.equal(t(U_freq_c10) %*% R_freq_c10 %*% U_freq_c10, Sigma_squared_freq_c10) #TRUE
+
+
+P_inv_sqrt_freq_c10 <- eig_P_freq_c10$vectors %*% diag(1 / sqrt(eig_P_freq_c10$values)) %*% t(eig_P_freq_c10$vectors)
+
+Sigma_vals_freq_c10 <- sqrt(diag(Sigma_squared_freq_c10))  
+Sigma_freq_c10 <- diag(Sigma_vals_freq_c10)
+Sigma_half_freq_c10 <- diag(sqrt(Sigma_vals_freq_c10))  # S^{1/2}
+
+T_freq_c10 <- Sigma_half_freq_c10 %*% t(U_freq_c10) %*% P_inv_sqrt_freq_c10
+T_freq_c10
+
+T_inv_freq_c10 <- solve(T_freq_c10)
+A_tilde_freq_c10 <- T_freq_c10 %*% M_freq_c10 %*% T_inv_freq_c10
+A_tilde_freq_c10
+
+sigma_freq_c10 <- sort(Sigma_vals_freq_c10, decreasing = TRUE) # Hankel singular values
+sigma_freq_c10
+
+sigma_df_freq_c10 <- data.frame(SingularValue = sigma_freq_c10, Index = 1:length(sigma_freq_c10))
+
+get_k_energy <- function(sigma_vals, threshold ) {
+  sigma_vals <- sigma_vals  # Ensure real
+  energy <- sigma_vals^2        # Energy is square of singular values
+  cum_energy <- cumsum(energy) / sum(energy)  # Cumulative % of total energy
+  k <- which(cum_energy >= threshold)[1]      # First index where threshold is reached
+  return(k)
+}
+
+k_freq_c10 <- get_k_energy(sigma_freq_c10, threshold = 0.70)
+cat("k_freq from energy threshold (70%):", k_freq_c10, "\n")
+
+
+qplot(1:length(sigma_freq_c10), sigma_freq_c10, geom = "point") +
+  geom_line() +
+  geom_vline(xintercept = k_freq_c10, color = "red", linetype = "dotted", size = 1) +
+  labs(title = paste("Scree Plot for c10"), x = "Singular values", y = "Relative variance") +
+  theme_minimal()
+
+
+A_tilde_11_freq_c10 <- A_tilde_freq_c10[1:k_freq_c10, 1:k_freq_c10] # k=5 x k=5 matrix
+A_tilde_11_freq_c10
+latex_code_A_tilde_11_freq_c10 <- print(xtable(A_tilde_11_freq_c10), include.rownames=FALSE, include.colnames=FALSE, floating=FALSE, hline.after=NULL, print.results = FALSE)
+
+
+
+T1_inv_freq_c10 <- T_inv_freq_c10[, 1:k_freq_c10]  # n x k matrix
+dim(T1_inv_freq_c10)
+
+# Function that evolves the reduced system 
+reduced_step <- function(z_t) {
+  return(A_tilde_11_freq %*% z_t)
+}
+
+# Function to recover full state from reduced coordinates
+recover_full_state <- function(z_t) {
+  return(T1_inv_freq %*% z_t)
+}
+at_c10 <- at_list[[10]]
+at_numeric_c10 <- as.matrix(at_c10[1:k_freq, -1])  # drops Time column
+
+zt_reduce_c10 <- reduced_step(at_numeric_c10)
+dim(zt_reduce_c10)
+
+at_recover_c10 <- recover_full_state(zt_reduce_c10)
+dim(at_recover_c10)
+
+
+
+T1_freq_c10 <- T_freq_c10[ 1:k_freq_c10,]  # k=4 x n=10 matrix
+dim(T1_freq_c10)
+dim(at_c10)
+
+# Using T1 I will get at_reduced (say zt) then calculate M_reduced (kxk)
+
+zt_c10 <- t(T1_freq_c10 %*% t(at_c10))
+dim(zt_c10)
+
+# Step 1: Compute C0_a
+mu_hat_zt_c10 <- colMeans(zt_c10)
+z_centered_c10 <- scale(zt_c10, center = mu_hat_zt_c10, scale = FALSE)
+C0_z_c10 <- var(z_centered_c10)
+dim(C0_z_c10)
+#View(C0_z)
+
+# Step 2: Compute C1_z (lag-1 covariance matrix)
+C1_z_c10 <- cov(z_centered_c10[-1, ], z_centered_c10[-T, ])
+dim(C1_z_c10)
+#View(C1_a)
+
+# Step 3: Calculate the method-of-moments estimator M(lag-1)
+M_freq_zt_c10 <- C1_z_c10 %*% solve(C0_z_c10)
+M_freq_zt_c10
+
+A_tilde_11_freq_c10
+
+
